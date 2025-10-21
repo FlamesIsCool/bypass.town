@@ -213,7 +213,7 @@ def bypass_rekonise(link_or_code: str):
 # New: Paste-Drop handler
 # ----------------------------
 
-def bypass_paste_drop_from_url(url: str):
+def bypass_paste_drop(url: str):
     """
     Extract paste slug from /paste/<slug> and return the paste content (span#content).
     """
@@ -445,7 +445,7 @@ def bypass_bitly(link: str):
         return None, "❌ bitly: unable to unshorten automatically. Try supplying a Bitly access token for API-backed expand."
     except requests.RequestException as e:
         return None, f"❌ bitly request error: {e}"
-    
+
 # ----------------------------
 # Paste Bin Fetcher
 # ----------------------------
@@ -528,7 +528,7 @@ def bypass_pastebin(link: str, max_chars: int = 2000, max_lines: int = 50):
     }
     return result, None
 
-    
+
 # ----------------------------
 # AdFoc.us enhanced bypass (single-file)
 # ----------------------------
@@ -786,7 +786,7 @@ def bypass_justpaste_it(link: str, max_chars: int = 2000, max_lines: int = 50):
 
     except Exception as e:
         return None, f"❌ Parsing error: {e}"
-    
+
 # ----------------------------
 # bstshrt handler
 # ----------------------------
@@ -847,7 +847,7 @@ def try_cejpa_for_destination(username: str, locker_id: str):
         return None
 
 
-def bypass_bstshrt_using_cejpa_then_html(link: str):
+def bypass_bstshrt(link: str):
     """
     1) Try cejpa analytics POST to see if it returns the destination.
     2) If that fails, fall back to extracting destination from BSTSHRT page HTML.
@@ -972,7 +972,72 @@ def bypass_link_unlock(link: str):
     except Exception as e:
         return None, f"❌ LINK-UNLOCK error: {e}"
 
+# ----------------------------
+# Normalize link for detection
+# ----------------------------
+from flask import jsonify
 
+# ----------------------------
+# Utility responses
+# ----------------------------
+def _success(data):
+    return jsonify({"success": True, "data": data}), 200
+
+def _error(msg):
+    return jsonify({"success": False, "error": msg}), 400
+
+
+# ----------------------------
+# Universal auto route generator
+# ----------------------------
+def register_bypass_routes(app, namespace):
+    """
+    Automatically register Flask routes for all functions that start with 'bypass_'.
+    Example: bypass_ytsubme -> /api/ytsubme
+    """
+    for name, func in namespace.items():
+        if name.startswith("bypass_") and callable(func):
+            route_name = name.replace("bypass_", "")
+            endpoint = f"/api/{route_name}"
+
+            def make_route(f):
+                def route_func():
+                    data = request.get_json(silent=True) or {}
+                    link = (data.get("link") or data.get("url") or "").strip()
+                    if not link:
+                        return _error("❌ Missing link.")
+                    try:
+                        result, error = f(link)
+                        if error:
+                            return _error(error)
+                        return _success(result)
+                    except Exception as e:
+                        return _error(f"❌ Internal error: {e}")
+                route_func.__name__ = f"api_{route_name}"
+                app.route(endpoint, methods=["POST"])(route_func)
+
+            make_route(func)
+
+    print("✅ Auto-registered bypass routes for:")
+    for name in namespace:
+        if name.startswith("bypass_"):
+            print("  • /api/" + name.replace("bypass_", ""))
+
+
+# ----------------------------
+# Root route (for HTML UI)
+# ----------------------------
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
+        link = request.form.get("link", "").strip()
+        if not link:
+            return render_template_string(HTML_TEMPLATE, error="❌ Please enter a link.")
+        result, error = auto_detect_bypass(link)
+        if error:
+            return render_template_string(HTML_TEMPLATE, error=error)
+        return render_template_string(HTML_TEMPLATE, result=result)
+    return render_template_string(HTML_TEMPLATE)
 
 
 # ----------------------------
@@ -1008,8 +1073,8 @@ def auto_detect_bypass(link: str):
         return bypass_rekonise(code)
 
     if "paste-drop.com" in link_lower or "/paste/" in link_lower:
-        return bypass_paste_drop_from_url(link)
-    
+        return bypass_paste_drop(link)
+
     if "pastebin.com" in link_lower:
         return bypass_pastebin(link)
 
@@ -1027,10 +1092,10 @@ def auto_detect_bypass(link: str):
 
     if "adfoc.us" in link_lower or "adfoc" in link_lower:
         return bypass_adfoc(link)
-    
+
     if "bstshrt.com" in link_lower:
-        return bypass_bstshrt_using_cejpa_then_html(link)
-    
+        return bypass_bstshrt(link)
+
     if "link-unlock.com" in link_lower or "api.link-unlock.com" in link_lower:
         return bypass_link_unlock(link)
 
@@ -1039,6 +1104,7 @@ def auto_detect_bypass(link: str):
 
 
     return None, "❌ Unsupported platform. Add support for this service."
+
 
 # ----------------------------
 # Routes
@@ -1058,7 +1124,10 @@ def home():
 
 # ----------------------------
 # Run
-# ----------------------------
-
+# ---------------------------
+# only run the dev server when executed directly (local dev)
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    import os
+    PORT = int(os.environ.get("PORT", 5004))
+    # debug=True is fine for local dev only
+    app.run(host="0.0.0.0", port=PORT, debug=True)
