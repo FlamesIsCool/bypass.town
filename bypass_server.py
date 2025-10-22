@@ -1976,13 +1976,23 @@ def home():
             error_msg = "❌ Please provide a valid link."
     return render_template_string(HTML_TEMPLATE, result=result_url, error=error_msg)
 
+
+# ----------------------------
+# Auto-register all /api/... routes
+# ----------------------------
+register_bypass_routes(app, globals())
+
+# Optional: add debug route to confirm registration
+@app.route("/_routes")
+def list_routes():
+    return {
+        "routes": [r.rule for r in app.url_map.iter_rules()]
+    }, 200
+
 # ----------------------------
 # Run
 # ---------------------------
 if __name__ == "__main__":
-    # Auto-register all bypass routes before starting Flask
-    register_bypass_routes(app, globals())
-
     import os
     PORT = int(os.environ.get("PORT", 5004))
     app.run(host="0.0.0.0", port=PORT, debug=True)
