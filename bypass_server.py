@@ -1954,7 +1954,7 @@ def auto_detect_bypass(link: str):
     if "tinyurl.com" in link_lower:
         return bypass_tinyurl(link)
     
-    if "v.gd" in link_lower:
+    if "v.gd" in link_lower or "is.gd" in link_lower:
         return bypass_vgd(link)
 
     return None, "❌ Unsupported platform. Add support for this service."
