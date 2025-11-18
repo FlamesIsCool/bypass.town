@@ -1,17 +1,16 @@
+from flask import Flask, request, render_template_string, redirect, jsonify
 from flask_cors import CORS
-app = Flask(__name__)
-CORS(app)
-
-
-from flask import Flask, request, render_template_string, redirect
 import requests
 import json
 import re
 from urllib.parse import urlparse, urljoin, quote_plus, urlencode
 import base64
-import re
 import asyncio
 from playwright.async_api import async_playwright
+
+app = Flask(__name__)
+CORS(app)
+
 
 # Playwright import used only in sub4unlock function to avoid import-time errors
 try:
@@ -2000,4 +1999,5 @@ if __name__ == "__main__":
     import os
     PORT = int(os.environ.get("PORT", 5004))
     app.run(host="0.0.0.0", port=PORT, debug=True)
+
 
