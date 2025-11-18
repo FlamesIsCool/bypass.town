@@ -1,4 +1,8 @@
-# bypass_server.py
+from flask_cors import CORS
+app = Flask(__name__)
+CORS(app)
+
+
 from flask import Flask, request, render_template_string, redirect
 import requests
 import json
@@ -1996,3 +2000,4 @@ if __name__ == "__main__":
     import os
     PORT = int(os.environ.get("PORT", 5004))
     app.run(host="0.0.0.0", port=PORT, debug=True)
+
