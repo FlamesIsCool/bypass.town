@@ -11,15 +11,12 @@ from playwright.async_api import async_playwright
 app = Flask(__name__)
 CORS(app)
 
-
-# Playwright import used only in sub4unlock function to avoid import-time errors
 try:
     from playwright.sync_api import sync_playwright
     PLAYWRIGHT_AVAILABLE = True
 except Exception:
     PLAYWRIGHT_AVAILABLE = False
 
-# BeautifulSoup
 try:
     from bs4 import BeautifulSoup
     BS4_AVAILABLE = True
@@ -28,13 +25,8 @@ except Exception:
 
 app = Flask(__name__)
 
-# Load your premium HTML (make sure bypass_town.html is in same folder)
 with open("bypass_town.html", "r", encoding="utf-8") as f:
     HTML_TEMPLATE = f.read()
-
-# ----------------------------
-# Utilities
-# ----------------------------
 
 def extract_code_from_url(url: str) -> str:
     """Extracts the last path segment or known query param code"""
@@ -48,10 +40,6 @@ def extract_code_from_url(url: str) -> str:
 
 def normalize_link_for_detection(link: str) -> str:
     return (link or "").strip().lower()
-
-# ----------------------------
-# Handlers (existing)
-# ----------------------------
 
 def bypass_ytsubme(code: str):
     try:
@@ -214,15 +202,11 @@ def bypass_rekonise(link_or_code: str):
         return final_link, None
     return None, "❌ Rekonise did not return a final link."
 
-# ----------------------------
-# New: Paste-Drop handler
-# ----------------------------
-
 def bypass_paste_drop(url: str):
     """
-    Extract paste slug from /paste/<slug> and return the paste content (span#content).
+    Extract paste slug from /paste/<slug> and return the paste content (span
     """
-    # quick validation
+
     m = re.search(r"/paste/([\w\d]+)", url)
     if not m:
         return None, "[!] Invalid paste-drop link: can't extract slug"
@@ -244,9 +228,6 @@ def bypass_paste_drop(url: str):
     except Exception as e:
         return None, f"[!] Parse error: {e}"
 
-# ----------------------------
-# MBoost handler (moved from server/mboost/handler.py)
-# ----------------------------
 def bypass_mboost(link: str):
     """
     Bypass mboost.me / api.mboost.me links.
@@ -257,30 +238,25 @@ def bypass_mboost(link: str):
     debug = {}
     candidates = []
 
-    # get slug from url (last path segment)
     slug = link.rstrip("/").split("/")[-1]
 
-    # 1) Try POST https://api.mboost.me/page
     try:
         api_url = "https://api.mboost.me/page"
         r = session.post(api_url, json={"pageId": slug}, timeout=8)
         jr = r.json()
         debug["api_response"] = str(jr)[:800]
 
-        # common shapes
         if isinstance(jr, dict):
             if "targetUrl" in jr and jr["targetUrl"]:
                 candidates.append(jr["targetUrl"])
             elif "data" in jr and isinstance(jr["data"], dict) and jr["data"].get("targetUrl"):
                 candidates.append(jr["data"]["targetUrl"])
 
-            # handle captcha case explicitly
             if jr.get("captcha") or jr.get("requiresCaptcha"):
                 return None, "❌ mboost: captcha required (api response indicated captcha)."
     except Exception as e:
         debug["api_error"] = str(e)
 
-    # 2) Fallback: GET /social-unlocks/<slug>/unlock
     if not candidates:
         try:
             unlock_url = f"https://api.mboost.me/social-unlocks/{slug}/unlock"
@@ -294,7 +270,6 @@ def bypass_mboost(link: str):
         except Exception as e:
             debug["unlock_error"] = str(e)
 
-    # 3) Last resort: regex from HTML page
     if not candidates:
         try:
             r = session.get(link, timeout=8)
@@ -307,15 +282,13 @@ def bypass_mboost(link: str):
         except Exception as e:
             debug["html_error"] = str(e)
 
-    # Return first candidate if any
     if candidates:
         final = candidates[0]
-        # optional: normalize absolute url
+
         if final.startswith("//"):
             final = "https:" + final
         return final, None
 
-    # Nothing found — return an informative error (debug included)
     dbg_str = "; ".join(f"{k}={v}" for k, v in debug.items())
     return None, f"❌ mboost: could not extract final link. debug: {dbg_str[:800]}"
 
@@ -339,7 +312,6 @@ def bypass_boost(url: str):
     try:
         html = fetch_html(url)
 
-        # 1) Look for bufpsvdhmjybvgfncqfa var in unlock.js
         m = re.search(r'bufpsvdhmjybvgfncqfa\s*=\s*"(.*?)"', html)
         if m:
             try:
@@ -349,7 +321,6 @@ def bypass_boost(url: str):
             except Exception:
                 pass
 
-        # 2) fallback: grab hrefs in .step_block
         soup = BeautifulSoup(html, "html.parser")
         candidates = [a.get("href") for a in soup.select(".step_block[href]") if a.get("href")]
         if candidates:
@@ -369,20 +340,17 @@ def _extract_meta_final(html, base_url):
     except Exception:
         return None
 
-    # 1. canonical link
     link = soup.find("link", rel="canonical")
     if link and link.get("href"):
         return urljoin(base_url, link["href"].strip())
 
-    # 2. Open Graph
     og = soup.find("meta", property="og:url")
     if og and og.get("content"):
         return urljoin(base_url, og["content"].strip())
 
-    # 3. meta refresh
     meta = soup.find("meta", attrs={"http-equiv": "refresh"})
     if meta and meta.get("content"):
-        # format: "5; url=https://example.com/"
+
         m = re.search(r'url=(.+)', meta["content"], flags=re.IGNORECASE)
         if m:
             return urljoin(base_url, m.group(1).strip().strip("'\""))
@@ -397,41 +365,37 @@ def bypass_bitly(link: str):
     session = requests.Session()
     session.headers.update({"User-Agent": BITLY_USER_AGENT, "Accept": "*/*"})
 
-    # normalize
     link = link.strip()
 
-    # 1) Try HEAD first (fast) and read 'Location'
     try:
         r = session.head(link, allow_redirects=False, timeout=REQUEST_TIMEOUT)
         if r.status_code in (301, 302, 303, 307, 308):
             loc = r.headers.get("Location")
             if loc:
-                # if relative, resolve
+
                 final = urljoin(link, loc)
                 return final, None
-        # Some servers disallow HEAD or return 200. Fallthrough to GET.
+
     except requests.RequestException as e:
-        # continue to GET fallback but log in error_msg if needed
+
         head_err = str(e)
     else:
         head_err = None
 
-    # 2) GET with redirects allowed (follow chain)
     try:
         r = session.get(link, allow_redirects=True, timeout=REQUEST_TIMEOUT)
-        # If requests followed redirects, r.url is final
+
         if r.history:
-            # at least one redirect happened
+
             return r.url, None
-        # If no history, maybe final is same page but contains canonical/og
+
         final_from_meta = _extract_meta_final(r.text, r.url)
         if final_from_meta:
             return final_from_meta, None
 
-        # 3) bitly sometimes returns JSON or proxy endpoints; try to parse JSON
         try:
             j = r.json()
-            # some bitly endpoints include fields like 'long_url' or nested structures
+
             if isinstance(j, dict):
                 for field in ("long_url", "longUrl", "url", "longUrl"):
                     if field in j and isinstance(j[field], str):
@@ -439,11 +403,10 @@ def bypass_bitly(link: str):
         except Exception:
             pass
 
-        # 4) fallback: if HEAD failed earlier, include that in error detail
         err_msg = "Could not resolve redirects."
         if head_err:
             err_msg += f" head_error={head_err}"
-        # still return r.url as a last-ditch guess if it looks external
+
         if r.url and not any(d in r.url.lower() for d in ("bit.ly", "j.mp", "bitly.com")):
             return r.url, None
 
@@ -451,9 +414,6 @@ def bypass_bitly(link: str):
     except requests.RequestException as e:
         return None, f"❌ bitly request error: {e}"
 
-# ----------------------------
-# Paste Bin Fetcher
-# ----------------------------
 def bypass_pastebin(link: str, max_chars: int = 2000, max_lines: int = 50):
     """
     Fetch a Pastebin paste and return a preview plus the raw URL.
@@ -468,7 +428,7 @@ def bypass_pastebin(link: str, max_chars: int = 2000, max_lines: int = 50):
         path = (parsed.path or "").lstrip("/")
         if not path:
             return None, "❌ Could not extract paste id from Pastebin URL."
-        # handle /raw/<id> or /<id>
+
         if path.startswith("raw/"):
             paste_id = path.split("/", 1)[1]
         else:
@@ -478,14 +438,13 @@ def bypass_pastebin(link: str, max_chars: int = 2000, max_lines: int = 50):
     except Exception as e:
         return None, f"❌ Invalid Pastebin URL: {e}"
 
-    # Fetch with streaming to avoid huge memory use
     try:
         headers = {"User-Agent": USER_AGENT}
         with requests.get(raw_url, headers=headers, timeout=12, stream=True) as r:
             r.raise_for_status()
             chunks = []
             read_chars = 0
-            # iter_content may yield bytes; request sets stream=True. decode later.
+
             for chunk in r.iter_content(chunk_size=1024):
                 if not chunk:
                     continue
@@ -495,7 +454,7 @@ def bypass_pastebin(link: str, max_chars: int = 2000, max_lines: int = 50):
                     piece = str(chunk)
                 chunks.append(piece)
                 read_chars += len(piece)
-                # stop after a reasonable buffer beyond max_chars
+
                 if read_chars >= max_chars + 1024:
                     break
             full_text = "".join(chunks)
@@ -507,7 +466,6 @@ def bypass_pastebin(link: str, max_chars: int = 2000, max_lines: int = 50):
     if not full_text:
         return None, "❌ Paste appears empty or unavailable."
 
-    # Truncate by lines then characters
     lines = full_text.splitlines()
     truncated = False
     if len(lines) > max_lines:
@@ -528,15 +486,11 @@ def bypass_pastebin(link: str, max_chars: int = 2000, max_lines: int = 50):
         "type": "pastebin",
         "preview": preview,
         "full_url": raw_url,
-        # include the partial raw_text (could be full if small)
+
         "raw_text": full_text if len(full_text) <= max_chars * 2 else full_text[: max_chars * 2],
     }
     return result, None
 
-
-# ----------------------------
-# AdFoc.us enhanced bypass (single-file)
-# ----------------------------
 import re
 from urllib.parse import urlparse, urljoin
 
@@ -566,12 +520,11 @@ def bypass_adfoc(link: str):
     except Exception as e:
         return None, f"❌ adfoc: initial fetch failed: {e}"
 
-    # helper: meta/canonical/og fallback
     def meta_fallback(html_text, base_url):
         try:
             if BS4_AVAILABLE:
                 soup = BeautifulSoup(html_text, "html.parser")
-                # canonical
+
                 c = soup.find("link", rel="canonical")
                 if c and c.get("href"):
                     return urljoin(base_url, c["href"].strip())
@@ -590,10 +543,9 @@ def bypass_adfoc(link: str):
     base = "{scheme}://{netloc}".format(scheme=urlparse(link).scheme or "https",
                                          netloc=urlparse(link).netloc)
 
-    # 1) If page contains #my_key hidden input, post to /serve/credit like the site does
     try:
         if "id=\"my_key\"" in html or "id='my_key'" in html or "name=\"key\"" in html:
-            # Try to extract the value
+
             mkey = None
             try:
                 if BS4_AVAILABLE:
@@ -607,11 +559,11 @@ def bypass_adfoc(link: str):
                         mkey = m.group(1)
                 if mkey:
                     credit_url = urljoin(base, "/serve/credit")
-                    # The real page posts form-encoded "key=..."
+
                     session.headers.update({"Referer": link})
                     ses_res = session.post(credit_url, data={"key": mkey}, timeout=8)
                     debug["serve_credit_status"] = getattr(ses_res, "status_code", None)
-                    # re-fetch main page to pick up any server-side changes after credit
+
                     r2 = session.get(link, timeout=10)
                     r2.raise_for_status()
                     html = r2.text
@@ -621,7 +573,6 @@ def bypass_adfoc(link: str):
     except Exception:
         pass
 
-    # 2) Try to find <a class="skip" href="..."> in the main page
     try:
         if BS4_AVAILABLE:
             soup = BeautifulSoup(html, "html.parser")
@@ -633,13 +584,11 @@ def bypass_adfoc(link: str):
     except Exception as e:
         debug["skip_parse_error"] = str(e)
 
-    # 3) Try JS variable: click_url = "..."
     m = re.search(r'click_url\s*=\s*["\']([^"\']+)["\']', html)
     if m:
         candidate = m.group(1)
         return urljoin(link, candidate), None
 
-    # 4) Try iframe inside interstitial: select iframe and fetch its src (ads provider page)
     try:
         if BS4_AVAILABLE:
             soup = BeautifulSoup(html, "html.parser")
@@ -649,22 +598,22 @@ def bypass_adfoc(link: str):
                 iframe_url = urljoin(link, iframe_src)
                 debug["iframe_src"] = iframe_url
                 try:
-                    # fetch iframe content; allow redirects
+
                     ir = session.get(iframe_url, allow_redirects=True, timeout=12)
                     debug["iframe_status"] = ir.status_code
-                    # often ad provider will redirect to final target or embed direct link
+
                     if ir.history:
-                        # requests followed redirects; return final location
+
                         return ir.url, None
-                    # parse iframe html for possible skip/link
+
                     iframe_html = ir.text
                     if BS4_AVAILABLE:
                         isoup = BeautifulSoup(iframe_html, "html.parser")
-                        # try anchors in iframe
+
                         ia = isoup.select_one("a.skip[href], a[target][href], a[href*='http']")
                         if ia and ia.get("href"):
                             return urljoin(iframe_url, ia["href"].strip()), None
-                    # fallback: look for meta/url or JS var in iframe
+
                     m2 = re.search(r'click_url\s*=\s*["\']([^"\']+)["\']', iframe_html)
                     if m2:
                         return urljoin(iframe_url, m2.group(1)), None
@@ -676,32 +625,18 @@ def bypass_adfoc(link: str):
     except Exception as e:
         debug["iframe_parse_error"] = str(e)
 
-    # 5) Fallback: try to find direct a.skip in page using regex (class may be added dynamically)
     m3 = re.search(r'href=["\'](https?://[^"\']+)["\'][^>]*class=["\']skip', html, flags=re.IGNORECASE)
     if m3:
         return m3.group(1), None
 
-    # 6) fallback meta/canonical/og
     meta_try = meta_fallback(html, link)
     if meta_try:
         return meta_try, None
 
-    # Nothing found — return detailed debug info
     dbg = "; ".join(f"{k}={v}" for k, v in debug.items())
-    # limit debug length to keep things readable
+
     dbg = (dbg[:1000] + "...") if len(dbg) > 1000 else dbg
     return None, f"❌ adfoc: could not extract skip/final link. debug: {dbg}"
-
-# ----------------------------
-# Linkvertise automated bypass 
-# ----------------------------
-
-
-
-
-# ----------------------------
-# JustPaste.it handler
-# ----------------------------
 
 def bypass_justpaste_it(link: str, max_chars: int = 2000, max_lines: int = 50):
     """
@@ -721,21 +656,18 @@ def bypass_justpaste_it(link: str, max_chars: int = 2000, max_lines: int = 50):
 
     try:
         soup = BeautifulSoup(r.text, "html.parser")
-        # Extract the article title if available
+
         title_tag = soup.find("h1", class_="articleFirstTitle")
         title_text = title_tag.get_text(strip=True) if title_tag else "(untitled)"
 
-        # Extract main article content
         article = soup.find("div", id="articleContent")
         if not article:
             return None, "❌ Could not find article content."
 
-        # Get visible text (excluding scripts, styles)
         raw_text = article.get_text(separator="\n", strip=True)
         if not raw_text:
             return None, "❌ Empty paste content."
 
-        # Limit for preview
         lines = raw_text.splitlines()
         truncated = False
         if len(lines) > max_lines:
@@ -762,9 +694,6 @@ def bypass_justpaste_it(link: str, max_chars: int = 2000, max_lines: int = 50):
     except Exception as e:
         return None, f"❌ Parsing error: {e}"
 
-# ----------------------------
-# bstshrt handler
-# ----------------------------
 import requests
 import re
 import json
@@ -796,23 +725,22 @@ def try_cejpa_for_destination(username: str, locker_id: str):
     }
     try:
         resp = requests.post(cj_url, headers=headers, json=payload, timeout=8)
-        # Many analytics endpoints return 202 / 204 with no body.
-        # If they return JSON, try to parse it:
+
         if resp.status_code in (200, 201) and resp.headers.get("content-type", "").lower().startswith("application/json"):
             try:
                 j = resp.json()
-                # try common keys
+
                 for k in ("destination_url", "destinationUrl", "destination"):
                     if k in j and isinstance(j[k], str) and j[k].startswith("http"):
                         return j[k]
-                # maybe nested
+
                 if isinstance(j.get("data"), dict):
                     for k in ("destination_url", "destinationUrl", "destination"):
                         if k in j["data"] and isinstance(j["data"][k], str):
                             return j["data"][k]
             except Exception:
                 pass
-        # Some endpoints echo back the posted JSON in text — search for destination in body text:
+
         if resp.text:
             m = re.search(r'"destination[_]?url"\s*:\s*"(https?://[^"]+)"', resp.text, re.IGNORECASE)
             if m:
@@ -821,26 +749,23 @@ def try_cejpa_for_destination(username: str, locker_id: str):
     except Exception:
         return None
 
-
 def bypass_bstshrt(link: str):
     """
     1) Try cejpa analytics POST to see if it returns the destination.
     2) If that fails, fall back to extracting destination from BSTSHRT page HTML.
     Returns (final_url, None) or (None, error_msg)
     """
-    # extract username and locker id from path
+
     parsed = urlparse(link)
     parts = parsed.path.strip("/").split("/")
     if len(parts) < 2:
         return None, "❌ BSTSHRT: invalid link structure."
     username, locker_id = parts[-2], parts[-1]
 
-    # 1) try cejpa
     dest = try_cejpa_for_destination(username, locker_id)
     if dest:
         return dest, None
 
-    # 2) fallback to scanning the HTML (robust scanning for destinationUrl/destination)
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -851,12 +776,11 @@ def bypass_bstshrt(link: str):
         r.raise_for_status()
         html = r.text
 
-        # primary: obvious patterns
         m = re.search(r'"destinationUrl"\s*:\s*"(https?://[^"]+)"', html)
         if not m:
             m = re.search(r'"destination_url"\s*:\s*"(https?://[^"]+)"', html)
         if not m:
-            # require proximity to "unlocker" to avoid picking ad scripts
+
             patt = re.compile(r'(https?://[^\s\'"<>\\,}]+)', re.IGNORECASE)
             for mm in patt.finditer(html):
                 url = mm.group(1)
@@ -875,9 +799,6 @@ def bypass_bstshrt(link: str):
     except Exception as e:
         return None, f"❌ BSTSHRT error fetching page: {e}"
 
-# ----------------------------
-# link-unlock handler
-# ----------------------------
 def bypass_link_unlock(link: str):
     """
     Fully functional Link-Unlock bypass.
@@ -899,7 +820,6 @@ def bypass_link_unlock(link: str):
             "Origin": "https://link-unlock.com",
         })
 
-        # 1️⃣ Get metadata (to grab step IDs)
         meta_url = f"https://api.link-unlock.com/u/{code}"
         r_meta = session.get(meta_url, timeout=10)
         r_meta.raise_for_status()
@@ -909,12 +829,10 @@ def bypass_link_unlock(link: str):
             return None, "❌ LINK-UNLOCK: invalid response from /u/<code>."
         unlock = meta["unlock"]
 
-        # Extract all step IDs
         steps = [s.get("id") for s in unlock.get("steps", []) if isinstance(s, dict) and s.get("id")]
         if not steps:
             return None, "❌ LINK-UNLOCK: no steps found to complete."
 
-        # 2️⃣ Get CSRF token
         token_res = session.get("https://api.link-unlock.com/auth/csrf-token", timeout=10)
         token_res.raise_for_status()
         token_data = token_res.json()
@@ -922,7 +840,6 @@ def bypass_link_unlock(link: str):
         if not csrf_token:
             return None, "❌ LINK-UNLOCK: could not retrieve CSRF token."
 
-        # 3️⃣ Complete all steps
         complete_url = f"https://api.link-unlock.com/u/{code}/complete"
         payload = {"steps": steps}
         session.headers["x-csrf-token"] = csrf_token
@@ -931,12 +848,10 @@ def bypass_link_unlock(link: str):
 
         data = r_complete.json()
 
-        # 4️⃣ Look for destination in response or next follow-up
         for key in ("redirectUrl", "url", "targetUrl", "destinationUrl"):
             if key in data and isinstance(data[key], str) and data[key].startswith("http"):
                 return data[key], None
 
-        # fallback: if not found, check if response includes unlock data
         if "unlock" in data and isinstance(data["unlock"], dict):
             for key in ("redirectUrl", "url", "targetUrl", "destinationUrl"):
                 if key in data["unlock"] and str(data["unlock"][key]).startswith("http"):
@@ -947,24 +862,14 @@ def bypass_link_unlock(link: str):
     except Exception as e:
         return None, f"❌ LINK-UNLOCK error: {e}"
 
-# ----------------------------
-# Normalize link for detection
-# ----------------------------
 from flask import jsonify
 
-# ----------------------------
-# Utility responses
-# ----------------------------
 def _success(data):
     return jsonify({"success": True, "data": data}), 200
 
 def _error(msg):
     return jsonify({"success": False, "error": msg}), 400
 
-
-# ----------------------------
-# Universal auto route generator
-# ----------------------------
 def register_bypass_routes(app, namespace):
     """
     Automatically register Flask routes for all functions that start with 'bypass_'.
@@ -998,10 +903,6 @@ def register_bypass_routes(app, namespace):
         if name.startswith("bypass_"):
             print("  • /api/" + name.replace("bypass_", ""))
 
-# ----------------------------
-# is.gd bypass
-# ----------------------------
-
 def bypass_isgd(link: str):
     """
     Unshorten an is.gd URL by reading the Location header (no redirect follow).
@@ -1020,18 +921,16 @@ def bypass_isgd(link: str):
     }
 
     try:
-        # 1) Try GET without following redirects — Location header usually contains target
+
         res = requests.get(link, headers=headers, allow_redirects=False, timeout=10)
     except Exception as e:
         return None, f"❌ is.gd request error: {e}"
 
-    # If server replied with a redirect, Location is the destination
     if res.status_code in (301, 302, 303, 307, 308):
         target = res.headers.get("Location")
         if target:
             return target.strip(), None
 
-    # 2) Fallback: maybe it returned a page showing the destination text
     html = res.text or ""
     if BS4_AVAILABLE:
         try:
@@ -1044,16 +943,11 @@ def bypass_isgd(link: str):
         except Exception:
             pass
 
-    # 3) Regex fallback on page text
     m = re.search(r'Your shortened URL goes to:\s*(https?://[^\s"<]+)', html)
     if m:
         return m.group(1).strip(), None
 
     return None, "❌ is.gd: could not extract original URL (no redirect or visible origin)."
-
-# ----------------------------
-# rebrand.ly bypass
-# ----------------------------
 
 def bypass_rebrandly(link: str):
     """
@@ -1067,7 +961,6 @@ def bypass_rebrandly(link: str):
     if not link:
         return None, "❌ Empty rebrand.ly link."
 
-    # Normalize
     if not link.startswith("http"):
         link = "https://" + link
 
@@ -1077,13 +970,11 @@ def bypass_rebrandly(link: str):
         "Referer": "https://rebrand.ly/"
     }
 
-    # 1) Try HEAD/GET without redirects to catch Location header quickly
     try:
         r = requests.head(link, headers=headers, allow_redirects=False, timeout=10)
     except Exception:
         r = None
 
-    # If HEAD gave redirect, return Location
     try:
         if r is not None and r.status_code in (301, 302, 303, 307, 308):
             loc = r.headers.get("Location")
@@ -1092,13 +983,11 @@ def bypass_rebrandly(link: str):
     except Exception:
         pass
 
-    # If HEAD returned 405 or similar, try GET without following redirects
     try:
         res = requests.get(link, headers=headers, allow_redirects=False, timeout=10)
     except Exception as e:
         return None, f"❌ rebrand.ly request error: {e}"
 
-    # If server responded with redirect, use Location header
     if res.status_code in (301, 302, 303, 307, 308):
         loc = res.headers.get("Location")
         if loc:
@@ -1106,16 +995,14 @@ def bypass_rebrandly(link: str):
 
     html = res.text or ""
 
-    # 2) If BeautifulSoup available, try canonical/og/meta refresh and inline JSON
     if BS4_AVAILABLE:
         try:
             soup = BeautifulSoup(html, "html.parser")
 
-            # canonical / og:url
             link_tag = soup.find("link", rel="canonical")
             if link_tag and link_tag.get("href"):
                 href = link_tag["href"].strip()
-                # If canonical is not the short link itself, return it
+
                 if href and not href.endswith(link.split("/")[-1]):
                     return href, None
 
@@ -1123,15 +1010,12 @@ def bypass_rebrandly(link: str):
             if og and og.get("content"):
                 return og["content"].strip(), None
 
-            # meta refresh
             meta = soup.find("meta", attrs={"http-equiv": "refresh"})
             if meta and meta.get("content"):
                 m = re.search(r'url=(.+)', meta["content"], flags=re.IGNORECASE)
                 if m:
                     return m.group(1).strip().strip("'\""), None
 
-            # Search for inline JSON that may contain destination or "destination"
-            # Look for <script> tags containing "destination" or "destinationUrl"
             for script in soup.find_all("script"):
                 txt = (script.string or "") if script else ""
                 if "destination" in txt or "destinationUrl" in txt or "destination_url" in txt:
@@ -1142,8 +1026,6 @@ def bypass_rebrandly(link: str):
         except Exception:
             pass
 
-    # 3) Regex fallback: find 'destination' or 'destinationUrl' nearby a URL
-    # Look for patterns like '"destination":"https://..."' or 'destinationUrl":"https://...'
     m = re.search(r'"destination"\s*:\s*"([^"]+)"', html)
     if not m:
         m = re.search(r'"destinationUrl"\s*:\s*"([^"]+)"', html, flags=re.IGNORECASE)
@@ -1152,9 +1034,6 @@ def bypass_rebrandly(link: str):
     if m:
         return m.group(1).strip(), None
 
-    # 4) General https URL fallback: find a visible https://... in the page and try to guess
-    # but prefer ones near the words 'destination' or 'url'
-    # Search windows of text around 'destination' occurrences
     lower = html.lower()
     for keyword in ("destination", "destinationurl", "target", "redirect"):
         for idx in [m.start() for m in re.finditer(keyword, lower)]:
@@ -1165,8 +1044,6 @@ def bypass_rebrandly(link: str):
             if mm:
                 return mm.group(1).strip(), None
 
-    # 5) Last resort: try a GET that follows redirects but DO NOT fetch the final content (just let requests follow)
-    # We do this as a last-ditch attempt but we won't raise on status errors.
     try:
         r2 = requests.get(link, headers=headers, allow_redirects=True, timeout=10)
         final = getattr(r2, "url", None)
@@ -1176,10 +1053,6 @@ def bypass_rebrandly(link: str):
         pass
 
     return None, "❌ rebrand.ly: could not extract original URL."
-
-# ----------------------------
-# shorter.me bypass
-# ----------------------------
 
 def bypass_shorterme(link: str):
     """
@@ -1194,7 +1067,6 @@ def bypass_shorterme(link: str):
     if not link:
         return None, "❌ Empty shorter.me link."
 
-    # Normalize
     if not link.startswith("http"):
         link = "https://" + link
 
@@ -1204,7 +1076,6 @@ def bypass_shorterme(link: str):
         "Referer": "https://shorter.me/"
     }
 
-    # 1) Try HEAD (fast) to catch Location header
     try:
         try:
             r = requests.head(link, headers=headers, allow_redirects=False, timeout=8)
@@ -1218,7 +1089,6 @@ def bypass_shorterme(link: str):
     except Exception:
         pass
 
-    # 2) Try GET without following redirects (sometimes returns a page with info)
     try:
         res = requests.get(link, headers=headers, allow_redirects=False, timeout=10)
     except Exception as e:
@@ -1231,12 +1101,10 @@ def bypass_shorterme(link: str):
 
     html = res.text or ""
 
-    # 3) Parse HTML intelligently if BS4 available
     if BS4_AVAILABLE:
         try:
             soup = BeautifulSoup(html, "html.parser")
 
-            # canonical / og:url
             c = soup.find("link", rel="canonical")
             if c and c.get("href"):
                 href = c["href"].strip()
@@ -1247,14 +1115,12 @@ def bypass_shorterme(link: str):
             if og and og.get("content"):
                 return og["content"].strip(), None
 
-            # meta refresh
             meta = soup.find("meta", attrs={"http-equiv": "refresh"})
             if meta and meta.get("content"):
                 m = re.search(r'url=(.+)', meta["content"], flags=re.IGNORECASE)
                 if m:
                     return m.group(1).strip().strip("'\""), None
 
-            # Search inline scripts for "destination", "target", "redirect" etc.
             for script in soup.find_all("script"):
                 txt = script.string or ""
                 if not txt:
@@ -1264,7 +1130,6 @@ def bypass_shorterme(link: str):
                     if m:
                         return m.group(1).strip(), None
 
-            # check for visible elements that might show the target (common id/class patterns)
             possible = soup.select_one("#origurl, .origurl, .destination, #destination")
             if possible and possible.get_text(strip=True):
                 m = re.search(r'(https?://[^\s"\'<>{}\)]+)', possible.get_text())
@@ -1274,7 +1139,6 @@ def bypass_shorterme(link: str):
         except Exception:
             pass
 
-    # 4) Regex fallback: search for "destination" JSON or nearby url strings
     m = re.search(r'"destination"\s*:\s*"([^"]+)"', html)
     if not m:
         m = re.search(r'"destinationUrl"\s*:\s*"([^"]+)"', html, flags=re.IGNORECASE)
@@ -1283,7 +1147,6 @@ def bypass_shorterme(link: str):
     if m:
         return m.group(1).strip(), None
 
-    # 5) Keyword-window search for any https://... near words like 'destination' or 'redirect'
     lower = html.lower()
     for keyword in ("destination", "redirect", "target", "url"):
         for mm in re.finditer(keyword, lower):
@@ -1294,7 +1157,6 @@ def bypass_shorterme(link: str):
             if found:
                 return found.group(1).strip(), None
 
-    # 6) Last resort: follow redirects (requests will fetch final URL)
     try:
         r2 = requests.get(link, headers=headers, allow_redirects=True, timeout=10)
         final = getattr(r2, "url", None)
@@ -1305,10 +1167,6 @@ def bypass_shorterme(link: str):
 
     return None, "❌ shorter.me: could not extract original URL."
 
-# ----------------------------
-# tiny.cc bypass
-# ----------------------------
-
 def bypass_tinycc(link: str):
     """
     Best-effort tiny.cc unshortener.
@@ -1318,8 +1176,6 @@ def bypass_tinycc(link: str):
     if not link:
         return None, "❌ Empty tiny.cc link."
 
-    # Normalize into candidates to try (order matters)
-    # Example input might be https://tiny.cc/lp3u001 but tiny.cc often issues HTTP redirects.
     from urllib.parse import urlparse, urlunparse
 
     def build_variants(raw):
@@ -1327,7 +1183,7 @@ def bypass_tinycc(link: str):
             raw = "https://" + raw
         p = urlparse(raw)
         if p.netloc.lower() != "tiny.cc":
-            # not tiny.cc -> nothing to do
+
             return [raw]
 
         path = p.path.rstrip("/")
@@ -1335,14 +1191,14 @@ def bypass_tinycc(link: str):
         http_base  = urlunparse(("http",  "tiny.cc", path, "", "", ""))
 
         variants = [
-            https_base,           # https
-            http_base,            # http
-            https_base + "=",     # https preview
-            http_base + "=",      # http preview
+            https_base,           
+            http_base,            
+            https_base + "=",     
+            http_base + "=",      
         ]
-        # Also try with a trailing slash (rarely needed, but harmless)
+
         variants += [v + "/" for v in variants if not v.endswith("/")]
-        # De-dupe preserving order
+
         seen, ordered = set(), []
         for v in variants:
             if v not in seen:
@@ -1358,19 +1214,18 @@ def bypass_tinycc(link: str):
         "Referer": "https://tiny.cc/"
     }
 
-    # Helper: parse 'Original URL ... <url>' from HTML like the snippet you shared
     def parse_original_from_html(html_text: str):
         if not html_text:
             return None
-        # 1) Look for explicit "Original URL" label then capture the next URL
+
         m = re.search(r'Original\s+URL[\s:\-]*[^\n\r\t]*?(https?://[^\s"\'<>{}\)]+)', html_text, flags=re.I)
         if m:
             return m.group(1).strip()
-        # 2) If BS4 available, scan nearby nodes
+
         if BS4_AVAILABLE:
             try:
                 soup = BeautifulSoup(html_text, "html.parser")
-                # scan text nodes for the label, then sibling
+
                 for node in soup.find_all(text=lambda t: t and "Original URL" in t):
                     sib = node.parent.find_next_sibling()
                     if sib:
@@ -1378,7 +1233,7 @@ def bypass_tinycc(link: str):
                         m2 = re.search(r'(https?://[^\s"\'<>{}\)]+)', txt)
                         if m2:
                             return m2.group(1).strip()
-                # try common containers
+
                 for sel in ("#recent", ".recent-item", ".recent-action-panel", ".origurl", ".long-url", "#origurl"):
                     el = soup.select_one(sel)
                     if el:
@@ -1388,15 +1243,14 @@ def bypass_tinycc(link: str):
                             return m3.group(1).strip()
             except Exception:
                 pass
-        # 3) As a last HTML fallback, pick the first non-tiny.cc https URL on the page
+
         for m4 in re.findall(r'(https?://[^\s"\'<>{}\)]+)', html_text):
             if "tiny.cc" not in m4.lower():
                 return m4.strip()
         return None
 
-    # Attempt each candidate
     for url in candidates:
-        # A) Try to read Location without following redirects
+
         try:
             r = requests.head(url, headers=headers, allow_redirects=False, timeout=8)
             if r.status_code in (301, 302, 303, 307, 308):
@@ -1413,10 +1267,9 @@ def bypass_tinycc(link: str):
                 if loc and "tiny.cc" not in loc.lower():
                     return loc.strip(), None
         except Exception as e:
-            # keep trying next variant
+
             continue
 
-        # B) Follow redirects (sometimes they only show up when following)
         try:
             r2 = requests.get(url, headers=headers, allow_redirects=True, timeout=12)
             final = getattr(r2, "url", None)
@@ -1425,11 +1278,10 @@ def bypass_tinycc(link: str):
         except Exception:
             pass
 
-        # C) Parse HTML (preview/Original URL UI)
         try:
             html = r.text if 'r' in locals() and r is not None and hasattr(r, "text") else ""
             if not html:
-                # if we only did HEAD above, fetch body for parse
+
                 resp = requests.get(url, headers=headers, allow_redirects=False, timeout=10)
                 html = resp.text or ""
             found = parse_original_from_html(html)
@@ -1438,7 +1290,6 @@ def bypass_tinycc(link: str):
         except Exception:
             pass
 
-        # D) If Cloudflare/JS challenge, optionally try Playwright
         html_lower = (html or "").lower()
         if any(s in html_lower for s in ("cloudflare", "please enable javascript", "attention required", "cf-chl")):
             if PLAYWRIGHT_AVAILABLE:
@@ -1455,19 +1306,15 @@ def bypass_tinycc(link: str):
                         browser.close()
                         if final_url and "tiny.cc" not in final_url.lower():
                             return final_url, None
-                        # parse preview content
+
                         cand = parse_original_from_html(content or "")
                         if cand:
                             return cand, None
                 except Exception:
                     pass
-            # If no Playwright, fall through to next variant
 
     return None, "❌ tiny.cc: could not extract original URL (tried http/https and preview)."
 
-# ----------------------------
-# tinylink.onl bypass
-# ----------------------------
 def bypass_tinylinkonl(link: str):
     """
     Unshorten tinylink.onl short links by extracting meta refresh or JS longUrl var.
@@ -1480,7 +1327,6 @@ def bypass_tinylinkonl(link: str):
 
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
 
-    # 0) Quick HEAD check for Location
     try:
         h = requests.head(link, headers=headers, allow_redirects=False, timeout=8)
         if h is not None and h.status_code in (301,302,303,307,308):
@@ -1490,13 +1336,11 @@ def bypass_tinylinkonl(link: str):
     except Exception:
         pass
 
-    # 1) GET the page (no redirect) and inspect HTML
     try:
         r = requests.get(link, headers=headers, allow_redirects=False, timeout=12)
     except Exception as e:
         return None, f"❌ tinylink.onl request error: {e}"
 
-    # If server returns a redirect header, honor it
     if r.status_code in (301,302,303,307,308):
         loc = r.headers.get("Location")
         if loc and "tinylink.onl" not in loc.lower():
@@ -1504,38 +1348,35 @@ def bypass_tinylinkonl(link: str):
 
     html = r.text or ""
 
-    # 2) meta refresh extraction: <meta http-equiv="refresh" content="10;https://..."> or url=...
     try:
         m_meta = re.search(r'<meta[^>]+http-equiv=["\']?refresh["\']?[^>]*content=["\']?([^"\'>]+)["\']?', html, flags=re.I)
         if m_meta:
             content = m_meta.group(1)
-            # find URL part
+
             m_url = re.search(r'url\s*=\s*(.+)', content, flags=re.I)
             if not m_url:
-                # sometimes content is like "10;https://..."
+
                 m_url = re.search(r';\s*(https?://[^\s"\']+)', content, flags=re.I)
             if m_url:
                 candidate = m_url.group(1).strip().strip('\'"')
-                # normalize candidate if relative
+
                 if candidate and "tinylink.onl" not in candidate.lower():
                     return candidate, None
     except Exception:
         pass
 
-    # 3) JavaScript variable extraction: var longUrl = "https:\/\/example.com\/path";
     try:
-        # match "longUrl" var with either single or double quotes, allow escaping
+
         m_js = re.search(r'var\s+longUrl\s*=\s*["\']([^"\']+)["\']', html, flags=re.I)
         if m_js:
             raw = m_js.group(1)
-            # unescape common JS escapes (\/ -> /)
+
             candidate = raw.replace('\\/', '/').strip()
             if candidate and candidate.startswith("http") and "tinylink.onl" not in candidate.lower():
                 return candidate, None
     except Exception:
         pass
 
-    # 4) Fallback: first external https URL on page that's not the short domain
     try:
         for u in re.findall(r'(https?://[^\s"\'<>]+)', html):
             if "tinylink.onl" not in u.lower():
@@ -1543,8 +1384,6 @@ def bypass_tinylinkonl(link: str):
     except Exception:
         pass
 
-    # 5) Optional Playwright fallback (shouldn't be necessary for this site,
-    # but kept for parity with other handlers)
     if PLAYWRIGHT_AVAILABLE:
         try:
             from playwright.sync_api import sync_playwright
@@ -1553,12 +1392,11 @@ def bypass_tinylinkonl(link: str):
                 context = browser.new_context(user_agent=USER_AGENT)
                 page = context.new_page()
                 page.goto(link, wait_until="networkidle", timeout=30000)
-                # wait a little for animations/redirect scripts to populate
+
                 page.wait_for_timeout(1200)
                 content = page.content() or ""
                 browser.close()
 
-                # repeat the same extraction on rendered content
                 m_js2 = re.search(r'var\s+longUrl\s*=\s*["\']([^"\']+)["\']', content, flags=re.I)
                 if m_js2:
                     candidate = m_js2.group(1).replace('\\/', '/').strip()
@@ -1574,14 +1412,10 @@ def bypass_tinylinkonl(link: str):
                         if candidate and "tinylink.onl" not in candidate.lower():
                             return candidate, None
         except Exception as e:
-            # don't leak huge internal trace here; give compact message
+
             return None, f"❌ tinylink.onl Playwright error: {e}"
 
     return None, "❌ tinylink.onl: could not extract original URL."
-
-# ----------------------------
-# tinyurl.com bypass
-# ----------------------------
 
 def bypass_tinyurl(link: str):
     """
@@ -1602,7 +1436,6 @@ def bypass_tinyurl(link: str):
 
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
 
-    # 1) HEAD quick check for Location header
     try:
         try:
             h = requests.head(link, headers=headers, allow_redirects=False, timeout=8)
@@ -1615,12 +1448,10 @@ def bypass_tinyurl(link: str):
     except Exception:
         pass
 
-    # helper to parse original URL from HTML content
     def parse_original_from_html(html_text: str):
         if not html_text:
             return None
 
-        # 1) Try extracting JSON snippet: {"data":[{"url":"https://..."}]}
         try:
             m = re.search(r'"data"\s*:\s*\[\s*\{\s*"url"\s*:\s*"([^"]+)"', html_text, flags=re.I)
             if m:
@@ -1630,11 +1461,10 @@ def bypass_tinyurl(link: str):
         except Exception:
             pass
 
-        # 2) Meta/canonical/og
         try:
             if BS4_AVAILABLE:
                 soup = BeautifulSoup(html_text, "html.parser")
-                # canonical link
+
                 link_tag = soup.find("link", rel="canonical")
                 if link_tag and link_tag.get("href"):
                     href = link_tag["href"].strip()
@@ -1645,7 +1475,7 @@ def bypass_tinyurl(link: str):
                     href = og["content"].strip()
                     if href and "tinyurl.com" not in href.lower():
                         return href
-                # meta refresh
+
                 meta = soup.find("meta", attrs={"http-equiv": "refresh"})
                 if meta and meta.get("content"):
                     c = meta["content"]
@@ -1654,8 +1484,7 @@ def bypass_tinyurl(link: str):
                         candidate = m2.group(1).strip().strip('\'"')
                         if candidate and "tinyurl.com" not in candidate.lower():
                             return candidate
-                # preview area: sometimes preview shows original link in an <a> or a .original-url element
-                # search for anchor tags that are not tinyurl
+
                 for a in soup.find_all("a", href=True):
                     href = a["href"].strip()
                     if href.startswith("http") and "tinyurl.com" not in href.lower():
@@ -1663,7 +1492,6 @@ def bypass_tinyurl(link: str):
         except Exception:
             pass
 
-        # 3) Generic regex fallback: find first external https URL
         try:
             for u in re.findall(r'(https?://[^\s"\'<>]+)', html_text):
                 if "tinyurl.com" not in u.lower():
@@ -1673,13 +1501,11 @@ def bypass_tinyurl(link: str):
 
         return None
 
-    # 2) GET without following redirects (so we can check preview and inline JSON)
     try:
         r = requests.get(link, headers=headers, allow_redirects=False, timeout=12)
     except Exception as e:
         return None, f"❌ tinyurl request error: {e}"
 
-    # If server returned a redirect header, honor it (fast)
     if r.status_code in (301,302,303,307,308):
         loc = r.headers.get("Location")
         if loc and "tinyurl.com" not in loc.lower():
@@ -1687,18 +1513,17 @@ def bypass_tinyurl(link: str):
 
     html = r.text or ""
 
-    # 2a) Try the preview variant (tinyurl supports preview via trailing '+')
     try:
-        # construct preview url -> tinyurl.com/<alias>+
+
         parsed = urlparse(link)
         path = parsed.path or ""
         if path:
-            # ensure no trailing slash
+
             alias = path.strip("/")
             preview_url = f"{parsed.scheme}://{parsed.netloc}/{alias}+"
             try:
                 pr = requests.get(preview_url, headers=headers, allow_redirects=False, timeout=10)
-                # parse preview page for original
+
                 preview_html = pr.text or ""
                 found = parse_original_from_html(preview_html)
                 if found:
@@ -1708,12 +1533,10 @@ def bypass_tinyurl(link: str):
     except Exception:
         pass
 
-    # 2b) Parse current HTML for embedded JSON/meta/original link
     found = parse_original_from_html(html)
     if found:
         return found, None
 
-    # 3) Last resort: follow redirects (requests will return the final location)
     try:
         r2 = requests.get(link, headers=headers, allow_redirects=True, timeout=12)
         final = getattr(r2, "url", None)
@@ -1723,10 +1546,6 @@ def bypass_tinyurl(link: str):
         pass
 
     return None, "❌ tinyurl: could not extract original URL."
-
-# ----------------------------
-# v.gd bypass
-# ----------------------------
 
 def bypass_vgd(link: str):
     """
@@ -1740,7 +1559,6 @@ def bypass_vgd(link: str):
 
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
 
-    # 1) HEAD quick check
     try:
         h = requests.head(link, headers=headers, allow_redirects=False, timeout=8)
         if h is not None and h.status_code in (301,302,303,307,308):
@@ -1750,13 +1568,11 @@ def bypass_vgd(link: str):
     except Exception:
         pass
 
-    # 2) GET page HTML
     try:
         r = requests.get(link, headers=headers, allow_redirects=False, timeout=12)
     except Exception as e:
         return None, f"❌ v.gd request error: {e}"
 
-    # honor redirect header if present
     if r.status_code in (301,302,303,307,308):
         loc = r.headers.get("Location")
         if loc and "v.gd" not in loc.lower():
@@ -1764,7 +1580,6 @@ def bypass_vgd(link: str):
 
     html = r.text or ""
 
-    # 3) meta refresh
     try:
         m_meta = re.search(r'<meta[^>]+http-equiv=["\']?refresh["\']?[^>]*content=["\']?([^"\'>]+)["\']?', html, flags=re.I)
         if m_meta:
@@ -1777,7 +1592,6 @@ def bypass_vgd(link: str):
     except Exception:
         pass
 
-    # 4) JS variable longUrl
     try:
         m_js = re.search(r'var\s+longUrl\s*=\s*["\']([^"\']+)["\']', html, flags=re.I)
         if m_js:
@@ -1787,11 +1601,10 @@ def bypass_vgd(link: str):
     except Exception:
         pass
 
-    # 5) BeautifulSoup: look for #origurl or text "Your shortened URL goes to"
     try:
         if BS4_AVAILABLE:
             soup = BeautifulSoup(html, "html.parser")
-            # common id in the page
+
             el = soup.select_one("#origurl")
             if el:
                 txt = el.get_text(" ", strip=True)
@@ -1801,7 +1614,6 @@ def bypass_vgd(link: str):
                     if "v.gd" not in cand.lower():
                         return cand, None
 
-            # fallback: look for phrase and following anchor
             for node in soup.find_all(string=re.compile(r'Your shortened URL goes to', flags=re.I)):
                 parent = node.parent
                 if parent:
@@ -1810,14 +1622,13 @@ def bypass_vgd(link: str):
                         href = a["href"].strip()
                         if href and "v.gd" not in href.lower():
                             return href, None
-                    # else try text within parent
+
                     m2 = re.search(r'(https?://[^\s"\'<>{}\)]+)', parent.get_text(" ", strip=True))
                     if m2:
                         cand = m2.group(1).strip()
                         if "v.gd" not in cand.lower():
                             return cand, None
 
-            # generic anchor fallback: first external href
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
                 if href.startswith("http") and "v.gd" not in href.lower():
@@ -1825,7 +1636,6 @@ def bypass_vgd(link: str):
     except Exception:
         pass
 
-    # 6) regex fallback: find first external https URL
     try:
         for u in re.findall(r'(https?://[^\s"\'<>]+)', html):
             if "v.gd" not in u.lower():
@@ -1833,7 +1643,6 @@ def bypass_vgd(link: str):
     except Exception:
         pass
 
-    # 7) Playwright fallback (shouldn't be necessary but included)
     if PLAYWRIGHT_AVAILABLE:
         try:
             from playwright.sync_api import sync_playwright
@@ -1845,14 +1654,13 @@ def bypass_vgd(link: str):
                 page.wait_for_timeout(800)
                 content = page.content() or ""
                 browser.close()
-                # repeat simple regex
+
                 m = re.search(r'(https?://[^\s"\'<>]+)', content)
                 if m and "v.gd" not in m.group(1).lower():
                     return m.group(1).strip(), None
         except Exception as e:
             return None, f"❌ v.gd Playwright error: {e}"
 
-    # 8) last resort: follow redirects
     try:
         final_resp = requests.get(link, headers=headers, allow_redirects=True, timeout=12)
         final = getattr(final_resp, "url", None)
@@ -1863,10 +1671,6 @@ def bypass_vgd(link: str):
 
     return None, "❌ v.gd: could not extract original URL."
 
-
-# ----------------------------
-# Root route (for HTML UI)
-# ----------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -1878,11 +1682,6 @@ def index():
             return render_template_string(HTML_TEMPLATE, error=error)
         return render_template_string(HTML_TEMPLATE, result=result)
     return render_template_string(HTML_TEMPLATE)
-
-
-# ----------------------------
-# Auto-detect (includes paste-drop)
-# ----------------------------
 
 def auto_detect_bypass(link: str):
     if not link:
@@ -1938,34 +1737,29 @@ def auto_detect_bypass(link: str):
 
     if "link-unlock.com" in link_lower or "api.link-unlock.com" in link_lower:
         return bypass_link_unlock(link)
-    
+
     if "is.gd" in link_lower:
         return bypass_isgd(link)
-    
+
     if "rebrand.ly" in link_lower or "rebrandly.com" in link_lower:
         return bypass_rebrandly(link)
-    
+
     if "shorter.me" in link_lower:
         return bypass_shorterme(link)
-    
+
     if "tiny.cc" in link_lower:
         return bypass_tinycc(link)
-    
+
     if "tinylink.onl" in link_lower:
         return bypass_tinylinkonl(link)
-    
+
     if "tinyurl.com" in link_lower:
         return bypass_tinyurl(link)
-    
+
     if "v.gd" in link_lower or "is.gd" in link_lower:
         return bypass_vgd(link)
 
     return None, "❌ Unsupported platform. Add support for this service."
-
-
-# ----------------------------
-# Routes
-# ----------------------------
 
 @app.route("/", methods=["GET", "POST"])
 def home():
@@ -1979,25 +1773,15 @@ def home():
             error_msg = "❌ Please provide a valid link."
     return render_template_string(HTML_TEMPLATE, result=result_url, error=error_msg)
 
-
-# ----------------------------
-# Auto-register all /api/... routes
-# ----------------------------
 register_bypass_routes(app, globals())
 
-# Optional: add debug route to confirm registration
 @app.route("/_routes")
 def list_routes():
     return {
         "routes": [r.rule for r in app.url_map.iter_rules()]
     }, 200
 
-# ----------------------------
-# Run
-# ---------------------------
 if __name__ == "__main__":
     import os
     PORT = int(os.environ.get("PORT", 5004))
     app.run(host="0.0.0.0", port=PORT, debug=True)
-
-
